@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Generation Export</title>
+    <script src="https://cdn.sheetjs.com/xlsx-0.19.2/package/dist/xlsx.full.min.js"></script>
+    <style>
+        .spinner {
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #3498db;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+        th {
+            background-color: #f4f4f4;
+        }
+        .button {
+            padding: 10px 15px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .button:hover {
+            background-color: #218838;
+        }
+        .form-section {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="spinner" class="spinner" style="display: none;"></div>
+
+    <div class="form-section">
+        <label for="entityType">Entity Type: </label>
+        <select id="entityType">
+            <option value="DEVICE">Device</option>
+            <option value="ASSET">Asset</option>
+        </select>
+        <br><br>
+
+        <label for="deviceCount">Device Count: </label>
+        <select id="deviceCount" onchange="updateDeviceInputs()">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+        </select>
+        <br><br>
+
+        <div id="deviceInputs">
+            <div>
+                <label for="deviceName_1">Device Name 1: </label>
+                <input type="text" id="deviceName_1" placeholder="Enter Device Name 1">
+                <label for="deviceId_1">Device ID 1: </label>
+                <input type="text" id="deviceId_1" placeholder="Enter Device ID 1">
+            </div>
+        </div>
+
+        <br>
+        <label for="dataKey">Data Key: </label>
+        <input type="text" id="dataKey" placeholder="Enter Data Key">
+        <br><br>
+        <label for="startDate">Start Date: </label>
+        <input type="date" id="startDate">
+        <label for="endDate">End Date: </label>
+        <input type="date" id="endDate">
+        <br><br>
+
+        <label>
+            <input type="checkbox" id="calculateTotal"> Calculate Daily Total for All Inverters
+        </label>
+        <br><br>
+
+        <label for="totalEntityType">Total Entity Type: </label>
+        <select id="totalEntityType">
+            <option value="DEVICE">Device</option>
+            <option value="ASSET">Asset</option>
+        </select>
+        <br><br>
+        <label for="totalEntityName">Total Entity Name: </label>
+        <input type="text" id="totalEntityName" placeholder="Enter Total Entity Name">
+        <br><br>
+        <label for="totalEntityId">Total Entity ID: </label>
+        <input type="text" id="totalEntityId" placeholder="Enter Total Entity ID">
+        <br><br>
+        <label for="totalDataKey">Total Data Key: </label>
+        <input type="text" id="totalDataKey" placeholder="Enter Total Data Key">
+        <br><br>
+
+        <button class="button" onclick="main()">Fetch Data</button>
+        <button class="button" onclick="exportToExcel()">Export to Excel</button>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        const baseURL = "https://cloud.thingsnode.cc";
+        const username = "sahanrashmikaslk@gmail.com";
+        const password = "ButFirstCoffee";
+        let exportData = []; // To store data for Excel export
+
+        // Update device inputs dynamically based on device count
+        function updateDeviceInputs() {
+            const deviceCount = parseInt(document.getElementById("deviceCount").value);
+            const deviceInputsDiv = document.getElementById("deviceInputs");
+            deviceInputsDiv.innerHTML = ""; // Clear existing inputs
+
+            console.log(`Updating device inputs for count: ${deviceCount}`);
+            for (let i = 1; i <= deviceCount; i++) {
+                const container = document.createElement("div");
+                container.innerHTML = `
+                    <label for="deviceName_${i}">Device Name ${i}: </label>
+                    <input type="text" id="deviceName_${i}" placeholder="Enter Device Name ${i}">
+                    <label for="deviceId_${i}">Device ID ${i}: </label>
+                    <input type="text" id="deviceId_${i}" placeholder="Enter Device ID ${i}">
+                    <br><br>
+                `;
+                deviceInputsDiv.appendChild(container);
+            }
+        }
+
+        async function authenticate() {
+            console.log("Authenticating...");
+            const response = await fetch(`${baseURL}/api/auth/login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password })
+            });
+
+            if (!response.ok) {
+                console.error("Authentication failed:", response.statusText);
+                return null;
+            }
+
+            const data = await response.json();
+            console.log("Authentication successful. Token received:", data.token);
+            return data.token;
+        }
+
+        function createDateRanges(start, end) {
+            const ranges = [];
+            let current = new Date(start);
+
+            while (current <= end) {
+                const startOfDay = new Date(current).setHours(6, 0, 0, 0); // Set to 6:00 AM
+                const endOfDay = new Date(current).setHours(23, 59, 59, 999);
+
+                ranges.push({ start: startOfDay, end: endOfDay });
+                current.setDate(current.getDate() + 1);
+            }
+
+            return ranges;
+        }
+
+        async function fetchTelemetry(token, deviceId, entityType, dataKey, range) {
+            const url = `${baseURL}/api/plugins/telemetry/${entityType}/${deviceId}/values/timeseries?keys=${dataKey}&startTs=${range.start}&endTs=${range.end}`;
+            console.log(`Fetching data for ${deviceId} from URL: ${url}`);
+
+            const response = await fetch(url, {
+                headers: { "X-Authorization": `Bearer ${token}` }
+            });
+
+            if (!response.ok) {
+                console.error(`Failed to fetch data for ${deviceId}:`, response.statusText);
+                return [];
+            }
+
+            const data = await response.json();
+            console.log(`Raw API response for ${deviceId} (${new Date(range.start).toLocaleDateString()}):`, data);
+
+            return data[dataKey] ? data[dataKey].sort((a, b) => a.ts - b.ts) : [];
+        }
+
+        async function main() {
+            const spinner = document.getElementById("spinner");
+            spinner.style.display = "block";
+
+            const startDateInput = document.getElementById("startDate").value;
+            const endDateInput = document.getElementById("endDate").value;
+            const entityType = document.getElementById("entityType").value;
+            const dataKey = document.getElementById("dataKey").value;
+
+            const calculateTotal = document.getElementById("calculateTotal").checked;
+            const totalEntityType = document.getElementById("totalEntityType").value;
+            const totalEntityName = document.getElementById("totalEntityName").value || "Total";
+            const totalEntityId = document.getElementById("totalEntityId").value;
+            const totalDataKey = document.getElementById("totalDataKey").value;
+
+            const deviceCount = parseInt(document.getElementById("deviceCount").value);
+            const devices = [];
+            for (let i = 1; i <= deviceCount; i++) {
+                const deviceName = document.getElementById(`deviceName_${i}`).value;
+                const deviceId = document.getElementById(`deviceId_${i}`).value;
+                if (!deviceName || !deviceId) {
+                    alert(`Please fill in both Device Name and Device ID for Device ${i}`);
+                    spinner.style.display = "none";
+                    return;
+                }
+                devices.push({ name: deviceName, id: deviceId });
+            }
+
+            const startDate = new Date(startDateInput).getTime();
+            const endDate = new Date(endDateInput).getTime();
+
+            if (!startDate || !endDate || startDate > endDate || !dataKey) {
+                alert("Please fill in all fields and select a valid date range.");
+                spinner.style.display = "none";
+                return;
+            }
+
+            const token = await authenticate();
+            if (!token) {
+                alert("Failed to authenticate. Please check your credentials.");
+                spinner.style.display = "none";
+                return;
+            }
+
+            const results = [];
+            const totals = {};
+            const dateRanges = createDateRanges(new Date(startDate), new Date(endDate));
+
+            for (const device of devices) {
+                console.log(`Processing data for device: ${device.name}`);
+
+                // Fetch previous day value
+                const previousDayRange = {
+                    start: new Date(startDate - 86400000).setHours(0, 0, 0, 0),
+                    end: new Date(startDate - 86400000).setHours(23, 59, 59, 999),
+                };
+
+                const previousDayData = await fetchTelemetry(token, device.id, entityType, dataKey, previousDayRange);
+                let previousEndValue = previousDayData.length > 0 ? parseFloat(previousDayData[previousDayData.length - 1].value) : 0;
+
+                console.log(`Initial Previous End Value for ${device.name}: ${previousEndValue}`);
+
+                for (const range of dateRanges) {
+                    const data = await fetchTelemetry(token, device.id, entityType, dataKey, range);
+
+                    const endValue = data.length > 0 ? parseFloat(data[data.length - 1].value) : previousEndValue;
+                    const startValue = previousEndValue;
+
+                    const dailyYield = Math.max(0, endValue - startValue);
+                    previousEndValue = endValue;
+
+                    console.log(`Daily Yield for ${device.name} on ${new Date(range.start).toLocaleDateString()}: ${dailyYield}`);
+
+                    results.push({
+                        deviceName: device.name,
+                        entityType,
+                        entityId: device.id,
+                        dataKey,
+                        timestamp: Math.floor(range.start / 1000), // Unix timestamp
+                        value: dailyYield
+                    });
+
+                    if (calculateTotal) {
+                        const dateKey = new Date(range.start).toISOString().split('T')[0];
+                        totals[dateKey] = (totals[dateKey] || 0) + dailyYield;
+                    }
+                }
+            }
+
+            // Add total row if checkbox is selected
+            if (calculateTotal) {
+                for (const [dateKey, totalValue] of Object.entries(totals)) {
+                    const totalTimestamp = Math.floor(new Date(dateKey).setHours(6, 0, 0, 0) / 1000);
+                    results.push({
+                        deviceName: totalEntityName, // Add Total Entity Name
+                        entityType: totalEntityType, // Add Entity Type
+                        entityId: totalEntityId,
+                        dataKey: totalDataKey,
+                        timestamp: totalTimestamp,
+                        value: totalValue
+                    });
+                }
+            }
+
+            exportData = results; // Store for Excel export
+            console.log("Processed Results:", results);
+
+            spinner.style.display = "none";
+            displayResults(results);
+        }
+
+        function displayResults(results) {
+            const resultsDiv = document.getElementById("results");
+            resultsDiv.innerHTML = "";
+
+            const table = document.createElement("table");
+            table.innerHTML = `
+                <thead>
+                    <tr>
+                        <th>Device Name</th>
+                        <th>Entity Type</th>
+                        <th>Entity ID</th>
+                        <th>Data Key</th>
+                        <th>Timestamp</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${results.map(result => `
+                        <tr>
+                            <td>${result.deviceName}</td>
+                            <td>${result.entityType}</td>
+                            <td>${result.entityId}</td>
+                            <td>${result.dataKey}</td>
+                            <td>${result.timestamp}</td>
+                            <td>${result.value}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            `;
+            resultsDiv.appendChild(table);
+        }
+
+        function exportToExcel() {
+            if (exportData.length === 0) {
+                alert("No data to export!");
+                return;
+            }
+
+            const worksheet = XLSX.utils.json_to_sheet(exportData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Daily Generation");
+
+            XLSX.writeFile(workbook, "Daily_Generation.xlsx");
+        }
+    </script>
+</body>
+</html>
