@@ -645,13 +645,17 @@
                     block.entityId === entityId
                 );
                 // console.log(Date(timestamp))
-                const tsParsed = timestamp.trim()
+                let tsParsed = timestamp.trim()
+                tsParsed = parseInt(tsParsed.length == 10 ? tsParsed+"000" : tsParsed)
+                
+
                 const telemetryData = {
-                  ts: parseInt(tsParsed.length == 10 ? tsParsed+"000" :tsParsed ),
+                  ts: tsParsed,
                   values: {
                     [dataKey.trim()]: value.trim(),
                   },
                 };
+                // console.log(telemetryData)
 
                 if (blockIndex !== -1) {
                   blocks[blockIndex].data.push(telemetryData);
@@ -667,7 +671,7 @@
                 row.innerHTML = `
           <td>${entityType.trim()}</td>
           <td>${entityId.trim()}</td>
-          <td>${Date(timestamp.trim()).toLocaleString()}</td>
+          <td>${ new Date(tsParsed).toLocaleString()}</td>
           <td>${dataKey.trim()}</td>
           <td>${value.trim()}</td>
         `;
